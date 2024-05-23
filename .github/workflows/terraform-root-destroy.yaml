@@ -1,0 +1,82 @@
+name: 'Terraform Destroy'
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: 'Agent selection string.'
+        required: false
+        default: 'ubuntu-latest'
+        type: string
+      confirm:
+        description: 'Confirm deletion of Terraform managed resources?'
+        required: true
+        default: 'false'
+        type: string
+      aws-assume-role-arn:
+        description: 'The AWS Role ARN to assume for Terraform operations.'
+        required: true
+        type: string
+      aws-assume-role-region:
+        description: 'The AWS region to assume IAM in for Terraform operations.'
+        required: true
+        type: string
+      tailscale:
+        description: 'Should the job connect to Tailscale.'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      terraform-registry-token:
+        description: 'Terraform registry token to authorize Terraform operations.'
+        required: false
+      tailscale-client-id:
+        description: 'Your Tailscale OAuth Client ID.'
+        required: false
+      tailscale-secret:
+        description: 'Your Tailscale OAuth Client Secret.'
+        required: false
+      tailscale-tags:
+        description: 'Comma separated list of Tags to be applied to nodes. The OAuth client must have permission to apply these tags.'
+        required: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform-destroy:
+    name: 'Terraform Destroy'
+    runs-on: ${{ inputs.runs-on }}
+    env:
+      TF_IN_AUTOMATION: true
+    steps:
+      - name: Sanity check
+        if: github.ref != 'refs/heads/main' || inputs.confirm != 'true'
+        run: echo 'Not running against 'main' branch or the action has not been confirmed, exiting.' && exit 1
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Read Terraform Version
+        run: echo "TF_VERSION=$(cat .terraform-version)" >> $GITHUB_ENV
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.aws-assume-role-arn }}
+          aws-region: ${{ inputs.aws-assume-role-region }}
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3.1.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          cli_config_credentials_token: ${{ secrets.terraform-registry-token }}
+          terraform_wrapper: false
+      - name: Initialize Terraform
+        run: terraform init
+      - name: Tailscale
+        if: inputs.tailscale == true
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.tailscale-client-id }}
+          oauth-secret: ${{ secrets.tailscale-secret }}
+          tags: ${{ secrets.tailscale-tags }}
+      - name: Terraform Destroy
+        run: ${{ secrets.terraform-env-vars }} terraform destroy -auto-approve -input=false
